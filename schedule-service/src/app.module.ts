@@ -5,6 +5,7 @@ import { ApolloDriver, ApolloDriverConfig } from '@nestjs/apollo';
 import { ApolloServerPluginLandingPageLocalDefault } from '@apollo/server/plugin/landingPage/default';
 import { join } from 'path';
 import { PrismaModule } from './prisma/prisma.module';
+import { RedisModule } from './cache/redis.module';
 import { AuthModule } from './auth/auth.module';
 import { CustomerModule } from './customer/customer.module';
 import { DoctorModule } from './doctor/doctor.module';
@@ -21,6 +22,7 @@ import { ScheduleModule } from './schedule/schedule.module';
       plugins: [ApolloServerPluginLandingPageLocalDefault({ embed: true })],
     }),
     PrismaModule,
+    RedisModule,
     AuthModule,
     CustomerModule,
     DoctorModule,

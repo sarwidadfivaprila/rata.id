@@ -1,14 +1,20 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { RedisService } from '../cache/redis.service';
 import { CreateCustomerInput } from './dto/create-customer.input';
 import { UpdateCustomerInput } from './dto/update-customer.input';
 import { PaginationArgs } from '../common/pagination.args';
 import { IPaginated } from '../common/paginated';
 import { CustomerModel } from './models/customer.model';
 
+const LIST_CACHE_PREFIX = 'customers:list:';
+
 @Injectable()
 export class CustomerService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly redis: RedisService,
+  ) {}
 
   async create(input: CreateCustomerInput): Promise<CustomerModel> {
     const existing = await this.prisma.customer.findUnique({
@@ -18,7 +24,9 @@ export class CustomerService {
       throw new ConflictException('A customer with this email already exists');
     }
 
-    return this.prisma.customer.create({ data: input });
+    const customer = await this.prisma.customer.create({ data: input });
+    await this.redis.invalidatePrefix(LIST_CACHE_PREFIX);
+    return customer;
   }
 
   async update(id: string, input: UpdateCustomerInput): Promise<CustomerModel> {
@@ -33,10 +41,18 @@ export class CustomerService {
       }
     }
 
-    return this.prisma.customer.update({ where: { id }, data: input });
+    const customer = await this.prisma.customer.update({ where: { id }, data: input });
+    await this.redis.invalidatePrefix(LIST_CACHE_PREFIX);
+    return customer;
   }
 
   async findAll(pagination: PaginationArgs): Promise<IPaginated<CustomerModel>> {
+    const cacheKey = `${LIST_CACHE_PREFIX}${JSON.stringify(pagination)}`;
+    const cached = await this.redis.get<IPaginated<CustomerModel>>(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
     const { page, limit } = pagination;
     const [data, total] = await Promise.all([
       this.prisma.customer.findMany({
@@ -47,7 +63,9 @@ export class CustomerService {
       this.prisma.customer.count(),
     ]);
 
-    return { data, total, page, limit };
+    const result = { data, total, page, limit };
+    await this.redis.set(cacheKey, result);
+    return result;
   }
 
   async findOne(id: string): Promise<CustomerModel> {
@@ -57,13 +75,17 @@ export class CustomerService {
   async remove(id: string): Promise<CustomerModel> {
     await this.findByIdOrThrow(id);
 
+    let customer: CustomerModel;
     try {
-      return await this.prisma.customer.delete({ where: { id } });
+      customer = await this.prisma.customer.delete({ where: { id } });
     } catch {
       throw new ConflictException(
         'Cannot delete a customer that has existing schedules',
       );
     }
+
+    await this.redis.invalidatePrefix(LIST_CACHE_PREFIX);
+    return customer;
   }
 
   private async findByIdOrThrow(id: string) {

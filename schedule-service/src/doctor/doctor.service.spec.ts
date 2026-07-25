@@ -2,6 +2,7 @@ import { Test } from '@nestjs/testing';
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { DoctorService } from './doctor.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { RedisService } from '../cache/redis.service';
 
 describe('DoctorService', () => {
   let service: DoctorService;
@@ -15,6 +16,7 @@ describe('DoctorService', () => {
       delete: jest.Mock;
     };
   };
+  let redis: { get: jest.Mock; set: jest.Mock; invalidatePrefix: jest.Mock };
 
   const existingDoctor = {
     id: 'doc-1',
@@ -35,8 +37,18 @@ describe('DoctorService', () => {
       },
     };
 
+    redis = {
+      get: jest.fn().mockResolvedValue(null),
+      set: jest.fn(),
+      invalidatePrefix: jest.fn(),
+    };
+
     const moduleRef = await Test.createTestingModule({
-      providers: [DoctorService, { provide: PrismaService, useValue: prisma }],
+      providers: [
+        DoctorService,
+        { provide: PrismaService, useValue: prisma },
+        { provide: RedisService, useValue: redis },
+      ],
     }).compile();
 
     service = moduleRef.get(DoctorService);

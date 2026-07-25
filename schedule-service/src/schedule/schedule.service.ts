@@ -1,16 +1,21 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { RedisService } from '../cache/redis.service';
 import { CreateScheduleInput } from './dto/create-schedule.input';
 import { ScheduleFilterArgs } from './dto/schedule-filter.args';
 import { IPaginated } from '../common/paginated';
 import { ScheduleModel } from './models/schedule.model';
 
 const PRISMA_UNIQUE_CONSTRAINT_ERROR = 'P2002';
+const LIST_CACHE_PREFIX = 'schedules:list:';
 
 @Injectable()
 export class ScheduleService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly redis: RedisService,
+  ) {}
 
   async create(input: CreateScheduleInput): Promise<ScheduleModel> {
     const [customer, doctor] = await Promise.all([
@@ -38,8 +43,9 @@ export class ScheduleService {
       );
     }
 
+    let schedule: ScheduleModel;
     try {
-      return await this.prisma.schedule.create({
+      schedule = await this.prisma.schedule.create({
         data: input,
         include: { customer: true, doctor: true },
       });
@@ -54,9 +60,18 @@ export class ScheduleService {
       }
       throw error;
     }
+
+    await this.redis.invalidatePrefix(LIST_CACHE_PREFIX);
+    return schedule;
   }
 
   async findAll(filter: ScheduleFilterArgs): Promise<IPaginated<ScheduleModel>> {
+    const cacheKey = `${LIST_CACHE_PREFIX}${JSON.stringify(filter)}`;
+    const cached = await this.redis.get<IPaginated<ScheduleModel>>(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
     const { page, limit, customerId, doctorId, scheduledFrom, scheduledTo } =
       filter;
 
@@ -82,7 +97,9 @@ export class ScheduleService {
       this.prisma.schedule.count({ where }),
     ]);
 
-    return { data, total, page, limit };
+    const result = { data, total, page, limit };
+    await this.redis.set(cacheKey, result);
+    return result;
   }
 
   async findOne(id: string): Promise<ScheduleModel> {
@@ -101,9 +118,11 @@ export class ScheduleService {
     if (!schedule) {
       throw new NotFoundException(`Schedule ${id} not found`);
     }
-    return this.prisma.schedule.delete({
+    const deleted = await this.prisma.schedule.delete({
       where: { id },
       include: { customer: true, doctor: true },
     });
+    await this.redis.invalidatePrefix(LIST_CACHE_PREFIX);
+    return deleted;
   }
 }

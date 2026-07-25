@@ -3,6 +3,7 @@ import { ConflictException, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { ScheduleService } from './schedule.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { RedisService } from '../cache/redis.service';
 
 describe('ScheduleService', () => {
   let service: ScheduleService;
@@ -17,6 +18,7 @@ describe('ScheduleService', () => {
       delete: jest.Mock;
     };
   };
+  let redis: { get: jest.Mock; set: jest.Mock; invalidatePrefix: jest.Mock };
 
   const customer = { id: 'cust-1', name: 'Jane' };
   const doctor = { id: 'doc-1', name: 'Dr. Smith' };
@@ -44,10 +46,17 @@ describe('ScheduleService', () => {
       },
     };
 
+    redis = {
+      get: jest.fn().mockResolvedValue(null),
+      set: jest.fn(),
+      invalidatePrefix: jest.fn(),
+    };
+
     const moduleRef = await Test.createTestingModule({
       providers: [
         ScheduleService,
         { provide: PrismaService, useValue: prisma },
+        { provide: RedisService, useValue: redis },
       ],
     }).compile();
 

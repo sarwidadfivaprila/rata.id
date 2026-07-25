@@ -2,6 +2,7 @@ import { Test } from '@nestjs/testing';
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { CustomerService } from './customer.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { RedisService } from '../cache/redis.service';
 
 describe('CustomerService', () => {
   let service: CustomerService;
@@ -15,6 +16,7 @@ describe('CustomerService', () => {
       delete: jest.Mock;
     };
   };
+  let redis: { get: jest.Mock; set: jest.Mock; invalidatePrefix: jest.Mock };
 
   const existingCustomer = {
     id: 'cust-1',
@@ -36,10 +38,17 @@ describe('CustomerService', () => {
       },
     };
 
+    redis = {
+      get: jest.fn().mockResolvedValue(null),
+      set: jest.fn(),
+      invalidatePrefix: jest.fn(),
+    };
+
     const moduleRef = await Test.createTestingModule({
       providers: [
         CustomerService,
         { provide: PrismaService, useValue: prisma },
+        { provide: RedisService, useValue: redis },
       ],
     }).compile();
 
