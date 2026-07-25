@@ -73,7 +73,7 @@
       "^.+\\.(t|j)s$": "ts-jest"
     },
     "collectCoverageFrom": [
-      "**/*.service.(t|j)s"
+      "**/*.(service|guard).(t|j)s"
     ],
     "coverageThreshold": {
       "global": {
