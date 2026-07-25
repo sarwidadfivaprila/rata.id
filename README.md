@@ -33,6 +33,7 @@ flowchart LR
 Requires Docker and Docker Compose.
 
 ```bash
+cp .env.example .env   # DB credentials + JWT secret used by docker-compose.yml
 docker compose up --build
 ```
 
@@ -87,10 +88,13 @@ npm run test:cov        # run with coverage report
 | `REDIS_PORT` | Redis port | `6379` |
 | `PORT` | HTTP port | `3002` |
 
-When running via `docker-compose up`, all of these are already set in `docker-compose.yml` using
-the container service names (`auth-postgres`, `schedule-postgres`, `redis`, `auth-service`) — no
-`.env` file is needed for the compose flow. `.env.example` in each service documents the variables
-for running a service standalone.
+When running via `docker-compose up`, `docker-compose.yml` builds these from a root-level `.env`
+(copy `.env.example` to get started — it holds the DB credentials and `JWT_SECRET` as
+`AUTH_DB_USER`/`AUTH_DB_PASSWORD`/`AUTH_DB_NAME`, `SCHEDULE_DB_USER`/`SCHEDULE_DB_PASSWORD`/
+`SCHEDULE_DB_NAME`, `JWT_SECRET`, `JWT_EXPIRES_IN`) plus the fixed container hostnames
+(`auth-postgres`, `schedule-postgres`, `redis`, `auth-service`). Nothing is hardcoded in the
+compose file itself, and `.env` is gitignored. Each service's own `.env.example` documents the
+same variables (in `DATABASE_URL` form) for running it standalone outside Docker.
 
 ## Example GraphQL operations
 
