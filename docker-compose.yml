@@ -1,0 +1,85 @@
+services:
+  auth-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: auth_db
+    volumes:
+      - auth-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - rata-network
+
+  schedule-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: schedule_db
+    volumes:
+      - schedule-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - rata-network
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - rata-network
+
+  auth-service:
+    build: ./auth-service
+    ports:
+      - "3001:3001"
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@auth-postgres:5432/auth_db?schema=public
+      JWT_SECRET: dev-only-auth-secret-change-me
+      JWT_EXPIRES_IN: 1h
+      PORT: 3001
+    depends_on:
+      auth-postgres:
+        condition: service_healthy
+    networks:
+      - rata-network
+
+  schedule-service:
+    build: ./schedule-service
+    ports:
+      - "3002:3002"
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@schedule-postgres:5432/schedule_db?schema=public
+      AUTH_SERVICE_URL: http://auth-service:3001/graphql
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      PORT: 3002
+    depends_on:
+      schedule-postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      auth-service:
+        condition: service_started
+    networks:
+      - rata-network
+
+networks:
+  rata-network:
+    driver: bridge
+
+volumes:
+  auth-postgres-data:
+  schedule-postgres-data:
