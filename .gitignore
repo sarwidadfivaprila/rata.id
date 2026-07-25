@@ -13,6 +13,9 @@ build/
 # Prisma
 **/generated/
 
+# Auto-generated GraphQL schema (code-first)
+**/schema.gql
+
 # Logs
 *.log
 npm-debug.log*
