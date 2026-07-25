@@ -1,0 +1,973 @@
+{
+  "info": {
+    "_postman_id": "b6f4f6d2-8f2a-4a3a-9c1e-2b7a8f1e9c3d",
+    "name": "RATA Healthcare Scheduling System",
+    "description": "Auth Service (:3001) and Schedule Service (:3002) GraphQL APIs for the Healthcare Scheduling System.\n\nFolders are meant to be run top to bottom, either one request at a time or via \"Run collection\" (Collection Runner / Newman) — each step saves what the next step needs into collection variables, and a fresh random email is generated for Register/Create Customer so the whole collection can be re-run repeatedly against the same database:\n\n1. Auth Service — Register, then Login (saves `accessToken`), then Validate Token.\n2. Schedule Service - Customer — Create (saves `customerId`), Update, List, Get.\n3. Schedule Service - Doctor — Create (saves `doctorId`), Update, List, Get.\n4. Schedule Service - Schedule — Create (saves `scheduleId`), List (with filters), Get.\n5. Error Cases — missing/invalid auth, duplicate email, invalid customer/doctor id, and a doctor double-booked at the same time as the schedule created in step 4 (must run before Cleanup deletes it).\n6. Cleanup — deletes the schedule, then the customer, then the doctor (FK-safe order).\n\nAll requests use Postman's native GraphQL body mode, so the query and variables are editable directly in the Postman UI.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "authServiceUrl",
+      "value": "http://localhost:3001/graphql",
+      "type": "string"
+    },
+    {
+      "key": "scheduleServiceUrl",
+      "value": "http://localhost:3002/graphql",
+      "type": "string"
+    },
+    {
+      "key": "userEmail",
+      "value": "doctor.admin@clinic.com",
+      "type": "string"
+    },
+    {
+      "key": "userPassword",
+      "value": "supersecret",
+      "type": "string"
+    },
+    {
+      "key": "accessToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "customerId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "customerEmail",
+      "value": "john.doe@example.com",
+      "type": "string"
+    },
+    {
+      "key": "doctorId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "scheduleId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "scheduleDateTime",
+      "value": "2026-09-01T09:00:00.000Z",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Auth Service",
+      "description": "Registration, login, and token validation. Runs on port 3001.",
+      "item": [
+        {
+          "name": "Register",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation Register($email: String!, $password: String!) {\n  register(input: { email: $email, password: $password }) {\n    id\n    email\n    createdAt\n  }\n}",
+                "variables": "{\n  \"email\": \"{{userEmail}}\",\n  \"password\": \"{{userPassword}}\"\n}"
+              }
+            },
+            "url": "{{authServiceUrl}}",
+            "description": "Registers a new user with email + password. Password is hashed with bcrypt server-side. A fresh, unique email is generated each time this runs (so the whole collection can be re-run repeatedly without hitting a stale \"already registered\" error) — the \"Error Cases\" folder demonstrates the duplicate-email rule separately by registering the same address twice in a row."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('userEmail', 'user.' + Date.now() + '@example.com');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test('user was created', () => {",
+                  "    pm.expect(json.data, JSON.stringify(json)).to.have.property('register');",
+                  "    pm.expect(json.data.register).to.have.property('id');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation Login($email: String!, $password: String!) {\n  login(input: { email: $email, password: $password }) {\n    accessToken\n    user {\n      id\n      email\n    }\n  }\n}",
+                "variables": "{\n  \"email\": \"{{userEmail}}\",\n  \"password\": \"{{userPassword}}\"\n}"
+              }
+            },
+            "url": "{{authServiceUrl}}",
+            "description": "Logs in with the registered email/password and returns a JWT access token. The token is saved automatically to the `accessToken` collection variable — every Schedule Service request below uses it via the Authorization header."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test('accessToken was returned', () => {",
+                  "    pm.expect(json.data, JSON.stringify(json)).to.have.property('login');",
+                  "    pm.expect(json.data.login.accessToken).to.be.a('string').and.not.empty;",
+                  "});",
+                  "if (json.data && json.data.login && json.data.login.accessToken) {",
+                  "    pm.collectionVariables.set('accessToken', json.data.login.accessToken);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validate Token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query ValidateToken($token: String!) {\n  validateToken(input: { token: $token }) {\n    valid\n    userId\n    email\n  }\n}",
+                "variables": "{\n  \"token\": \"{{accessToken}}\"\n}"
+              }
+            },
+            "url": "{{authServiceUrl}}",
+            "description": "Validates the saved access token and returns the associated user info. This is the same query the Schedule Service calls internally on every request — useful to sanity-check a token directly."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test('token is valid', () => {",
+                  "    pm.expect(json.data.validateToken.valid, JSON.stringify(json)).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Schedule Service - Customer",
+      "description": "Customer CRUD. Runs on port 3002. Every request requires the Authorization header (set automatically from `accessToken`).",
+      "item": [
+        {
+          "name": "Create Customer",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation CreateCustomer($name: String!, $email: String!) {\n  createCustomer(input: { name: $name, email: $email }) {\n    id\n    name\n    email\n    createdAt\n  }\n}",
+                "variables": "{\n  \"name\": \"John Doe\",\n  \"email\": \"{{customerEmail}}\"\n}"
+              }
+            },
+            "url": "{{scheduleServiceUrl}}",
+            "description": "Creates a new customer. Saves the returned id to the `customerId` collection variable. A fresh, unique email is generated each time this runs, so the collection can be re-run repeatedly."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('customerEmail', 'customer.' + Date.now() + '@example.com');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test('customer was created', () => {",
+                  "    pm.expect(json.data, JSON.stringify(json)).to.have.property('createCustomer');",
+                  "});",
+                  "if (json.data && json.data.createCustomer) {",
+                  "    pm.collectionVariables.set('customerId', json.data.createCustomer.id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update Customer",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation UpdateCustomer($id: String!, $name: String) {\n  updateCustomer(id: $id, input: { name: $name }) {\n    id\n    name\n    email\n    updatedAt\n  }\n}",
+                "variables": "{\n  \"id\": \"{{customerId}}\",\n  \"name\": \"John A. Doe\"\n}"
+              }
+            },
+            "url": "{{scheduleServiceUrl}}",
+            "description": "Updates the customer created above (uses the saved `customerId`). Fields are optional — only send what changes."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Customers (paginated)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query Customers($page: Int!, $limit: Int!) {\n  customers(page: $page, limit: $limit) {\n    total\n    page\n    limit\n    data {\n      id\n      name\n      email\n    }\n  }\n}",
+                "variables": "{\n  \"page\": 1,\n  \"limit\": 10\n}"
+              }
+            },
+            "url": "{{scheduleServiceUrl}}",
+            "description": "Lists customers with pagination. Cached in Redis for 30s per unique page/limit combination."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test('returns a paginated list', () => {",
+                  "    pm.expect(json.data.customers).to.have.property('total');",
+                  "    pm.expect(json.data.customers.data).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Customer by ID",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query Customer($id: String!) {\n  customer(id: $id) {\n    id\n    name\n    email\n    createdAt\n    updatedAt\n  }\n}",
+                "variables": "{\n  \"id\": \"{{customerId}}\"\n}"
+              }
+            },
+            "url": "{{scheduleServiceUrl}}",
+            "description": "Fetches a single customer by id (uses the saved `customerId`)."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Schedule Service - Doctor",
+      "description": "Doctor CRUD. Runs on port 3002. Every request requires the Authorization header (set automatically from `accessToken`).",
+      "item": [
+        {
+          "name": "Create Doctor",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation CreateDoctor($name: String!) {\n  createDoctor(input: { name: $name }) {\n    id\n    name\n    createdAt\n  }\n}",
+                "variables": "{\n  \"name\": \"Dr. Alice\"\n}"
+              }
+            },
+            "url": "{{scheduleServiceUrl}}",
+            "description": "Creates a new doctor. Saves the returned id to the `doctorId` collection variable."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test('doctor was created', () => {",
+                  "    pm.expect(json.data, JSON.stringify(json)).to.have.property('createDoctor');",
+                  "});",
+                  "if (json.data && json.data.createDoctor) {",
+                  "    pm.collectionVariables.set('doctorId', json.data.createDoctor.id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update Doctor",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation UpdateDoctor($id: String!, $name: String!) {\n  updateDoctor(id: $id, input: { name: $name }) {\n    id\n    name\n    updatedAt\n  }\n}",
+                "variables": "{\n  \"id\": \"{{doctorId}}\",\n  \"name\": \"Dr. Alice B.\"\n}"
+              }
+            },
+            "url": "{{scheduleServiceUrl}}",
+            "description": "Updates the doctor created above (uses the saved `doctorId`)."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Doctors (paginated)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query Doctors($page: Int!, $limit: Int!) {\n  doctors(page: $page, limit: $limit) {\n    total\n    page\n    limit\n    data {\n      id\n      name\n    }\n  }\n}",
+                "variables": "{\n  \"page\": 1,\n  \"limit\": 10\n}"
+              }
+            },
+            "url": "{{scheduleServiceUrl}}",
+            "description": "Lists doctors with pagination. Cached in Redis for 30s per unique page/limit combination."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Doctor by ID",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query Doctor($id: String!) {\n  doctor(id: $id) {\n    id\n    name\n    createdAt\n    updatedAt\n  }\n}",
+                "variables": "{\n  \"id\": \"{{doctorId}}\"\n}"
+              }
+            },
+            "url": "{{scheduleServiceUrl}}",
+            "description": "Fetches a single doctor by id (uses the saved `doctorId`)."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Schedule Service - Schedule",
+      "description": "Schedule CRUD. Requires Create Customer and Create Doctor to have run first (their ids are reused here). Runs on port 3002.",
+      "item": [
+        {
+          "name": "Create Schedule",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation CreateSchedule($objective: String!, $customerId: String!, $doctorId: String!, $scheduledAt: DateTime!) {\n  createSchedule(\n    input: {\n      objective: $objective\n      customerId: $customerId\n      doctorId: $doctorId\n      scheduledAt: $scheduledAt\n    }\n  ) {\n    id\n    objective\n    scheduledAt\n    customer {\n      name\n    }\n    doctor {\n      name\n    }\n  }\n}",
+                "variables": "{\n  \"objective\": \"Annual checkup\",\n  \"customerId\": \"{{customerId}}\",\n  \"doctorId\": \"{{doctorId}}\",\n  \"scheduledAt\": \"{{scheduleDateTime}}\"\n}"
+              }
+            },
+            "url": "{{scheduleServiceUrl}}",
+            "description": "Creates a consultation schedule for the saved customer/doctor. Rejects with Not Found if either id doesn't exist, and with Conflict if the doctor already has a schedule at the exact same `scheduledAt`. Saves the returned id to the `scheduleId` collection variable."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test('schedule was created', () => {",
+                  "    pm.expect(json.data, JSON.stringify(json)).to.have.property('createSchedule');",
+                  "});",
+                  "if (json.data && json.data.createSchedule) {",
+                  "    pm.collectionVariables.set('scheduleId', json.data.createSchedule.id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Schedules (filter + paginated)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query Schedules($page: Int!, $limit: Int!, $doctorId: String, $scheduledFrom: DateTime, $scheduledTo: DateTime) {\n  schedules(\n    page: $page\n    limit: $limit\n    doctorId: $doctorId\n    scheduledFrom: $scheduledFrom\n    scheduledTo: $scheduledTo\n  ) {\n    total\n    page\n    limit\n    data {\n      id\n      objective\n      scheduledAt\n      customer {\n        name\n      }\n      doctor {\n        name\n      }\n    }\n  }\n}",
+                "variables": "{\n  \"page\": 1,\n  \"limit\": 10,\n  \"doctorId\": \"{{doctorId}}\",\n  \"scheduledFrom\": \"2026-09-01T00:00:00.000Z\",\n  \"scheduledTo\": \"2026-09-30T23:59:59.000Z\"\n}"
+              }
+            },
+            "url": "{{scheduleServiceUrl}}",
+            "description": "Lists schedules with optional filters (`customerId`, `doctorId`, `scheduledFrom`, `scheduledTo`) plus pagination. Remove filter variables you don't need, or set them to null."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Schedule by ID",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query Schedule($id: String!) {\n  schedule(id: $id) {\n    id\n    objective\n    scheduledAt\n    customer {\n      name\n      email\n    }\n    doctor {\n      name\n    }\n  }\n}",
+                "variables": "{\n  \"id\": \"{{scheduleId}}\"\n}"
+              }
+            },
+            "url": "{{scheduleServiceUrl}}",
+            "description": "Fetches a single schedule by id, including the nested customer/doctor (uses the saved `scheduleId`)."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Error Cases",
+      "description": "Demonstrates the validation and auth rules required by the spec. Run this folder before \"Cleanup\" — the last test here depends on the schedule created above still existing.",
+      "item": [
+        {
+          "name": "Unauthorized - Missing Bearer Token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query Customers {\n  customers(page: 1, limit: 10) {\n    total\n  }\n}",
+                "variables": "{}"
+              }
+            },
+            "url": "{{scheduleServiceUrl}}",
+            "description": "Calls the Schedule Service with no Authorization header at all. Expect an UNAUTHENTICATED GraphQL error."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200 (GraphQL errors still return 200)', () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test('returns an Unauthorized error', () => {",
+                  "    pm.expect(json.errors, JSON.stringify(json)).to.be.an('array').that.is.not.empty;",
+                  "    pm.expect(json.errors[0].extensions.code).to.eql('UNAUTHENTICATED');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthorized - Invalid Token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query Customers {\n  customers(page: 1, limit: 10) {\n    total\n  }\n}",
+                "variables": "{}"
+              }
+            },
+            "url": "{{scheduleServiceUrl}}",
+            "description": "Calls the Schedule Service with a garbage Bearer token. Expect an UNAUTHENTICATED GraphQL error."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test('returns an Unauthorized error', () => {",
+                  "    pm.expect(json.errors[0].extensions.code).to.eql('UNAUTHENTICATED');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Conflict - Duplicate Email on Register",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation Register($email: String!, $password: String!) {\n  register(input: { email: $email, password: $password }) {\n    id\n  }\n}",
+                "variables": "{\n  \"email\": \"{{userEmail}}\",\n  \"password\": \"{{userPassword}}\"\n}"
+              }
+            },
+            "url": "{{authServiceUrl}}",
+            "description": "Registers the same email twice. The second call must return a Conflict error."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test('returns a Conflict error for the already-registered email', () => {",
+                  "    pm.expect(json.errors, JSON.stringify(json)).to.be.an('array').that.is.not.empty;",
+                  "    pm.expect(json.errors[0].extensions.originalError.statusCode).to.eql(409);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Not Found - Invalid Doctor/Customer id",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation CreateSchedule($customerId: String!, $doctorId: String!, $scheduledAt: DateTime!) {\n  createSchedule(\n    input: {\n      objective: \"Should fail\"\n      customerId: $customerId\n      doctorId: $doctorId\n      scheduledAt: $scheduledAt\n    }\n  ) {\n    id\n  }\n}",
+                "variables": "{\n  \"customerId\": \"00000000-0000-0000-0000-000000000000\",\n  \"doctorId\": \"00000000-0000-0000-0000-000000000000\",\n  \"scheduledAt\": \"2026-10-01T09:00:00.000Z\"\n}"
+              }
+            },
+            "url": "{{scheduleServiceUrl}}",
+            "description": "Creates a schedule with ids that don't exist. Expect a Not Found error naming which id was invalid."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test('returns a Not Found error', () => {",
+                  "    pm.expect(json.errors, JSON.stringify(json)).to.be.an('array').that.is.not.empty;",
+                  "    pm.expect(json.errors[0].extensions.originalError.statusCode).to.eql(404);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Conflict - Doctor Already Booked at That Time",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation CreateSchedule($customerId: String!, $doctorId: String!, $scheduledAt: DateTime!) {\n  createSchedule(\n    input: {\n      objective: \"Should conflict\"\n      customerId: $customerId\n      doctorId: $doctorId\n      scheduledAt: $scheduledAt\n    }\n  ) {\n    id\n  }\n}",
+                "variables": "{\n  \"customerId\": \"{{customerId}}\",\n  \"doctorId\": \"{{doctorId}}\",\n  \"scheduledAt\": \"{{scheduleDateTime}}\"\n}"
+              }
+            },
+            "url": "{{scheduleServiceUrl}}",
+            "description": "Creates a schedule at the exact same doctorId + scheduledAt as \"Create Schedule\" above. Requires that request to have run first in this session (so `doctorId`/`customerId`/`scheduleDateTime` are populated). Expect a Conflict error."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "pm.test('returns a Conflict error for the double-booked doctor', () => {",
+                  "    pm.expect(json.errors, JSON.stringify(json)).to.be.an('array').that.is.not.empty;",
+                  "    pm.expect(json.errors[0].extensions.originalError.statusCode).to.eql(409);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Cleanup",
+      "description": "Deletes the records created above, in FK-safe order (a schedule must be deleted before the customer/doctor it references — both have a RESTRICT foreign key). Run this last, after \"Error Cases\".",
+      "item": [
+        {
+          "name": "Delete Schedule",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation DeleteSchedule($id: String!) {\n  deleteSchedule(id: $id) {\n    id\n  }\n}",
+                "variables": "{\n  \"id\": \"{{scheduleId}}\"\n}"
+              }
+            },
+            "url": "{{scheduleServiceUrl}}",
+            "description": "Deletes the schedule created in \"Schedule Service - Schedule\" (uses the saved `scheduleId`)."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete Customer",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation DeleteCustomer($id: String!) {\n  deleteCustomer(id: $id) {\n    id\n  }\n}",
+                "variables": "{\n  \"id\": \"{{customerId}}\"\n}"
+              }
+            },
+            "url": "{{scheduleServiceUrl}}",
+            "description": "Deletes the customer created in \"Schedule Service - Customer\" (uses the saved `customerId`)."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete Doctor",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation DeleteDoctor($id: String!) {\n  deleteDoctor(id: $id) {\n    id\n  }\n}",
+                "variables": "{\n  \"id\": \"{{doctorId}}\"\n}"
+              }
+            },
+            "url": "{{scheduleServiceUrl}}",
+            "description": "Deletes the doctor created in \"Schedule Service - Doctor\" (uses the saved `doctorId`)."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

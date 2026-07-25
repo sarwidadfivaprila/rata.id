@@ -99,7 +99,11 @@ same variables (in `DATABASE_URL` form) for running it standalone outside Docker
 ## Example GraphQL operations
 
 More runnable examples (every mutation/query in both services) are in
-[`docs/graphql-examples.md`](docs/graphql-examples.md). Typical flow:
+[`docs/graphql-examples.md`](docs/graphql-examples.md), and a ready-to-import
+[`docs/postman-collection.json`](docs/postman-collection.json) covers the same operations with
+auto-chained variables (login saves the token, create requests save their ids) plus a dedicated
+"Error Cases" folder — import it into Postman, or run it headlessly with
+`npx newman run docs/postman-collection.json` once the stack is up. Typical flow:
 
 **1. Register and log in (Auth Service, `:3001/graphql`)**
 
